@@ -45,6 +45,22 @@ func (c *Configurator) writeTemplate() error {
 	return tmpl.ExecuteTemplate(w, c.cfg.Type, c.Containers())
 }
 
+// reload attempts to reload the web server configuration.
+func (c *Configurator) reload() error {
+	b, err := ioutil.ReadFile(c.cfg.Pidfile)
+	if err != nil {
+		return fmt.Errorf("unable to read pidfile: %s", err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	if pid == 0 {
+		return errors.New("pidfile is corrupt")
+	}
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+		return fmt.Errorf("unable to restart %s: %s", c.cfg.Type, err)
+	}
+	return nil
+}
+
 // New creates a new configurator using the provided configuration.
 func New(cfg *Config) (*Configurator, error) {
 	switch cfg.Type {
@@ -102,20 +118,11 @@ func (c *Configurator) Containers() []*container.Container {
 
 // Reload generates the configuration file for the web server and applies it.
 // This method is thread-safe.
-func (c *Configurator) Reload() error {
+func (c *Configurator) Reload() {
 	if err := c.writeTemplate(); err != nil {
-		return err
+		c.log.Error(err)
 	}
-	b, err := ioutil.ReadFile(c.cfg.Pidfile)
-	if err != nil {
-		return fmt.Errorf("unable to read pidfile: %s", err)
+	if err := c.reload(); err != nil {
+		c.log.Error(err)
 	}
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-	if pid == 0 {
-		return errors.New("pidfile is corrupt")
-	}
-	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("unable to restart %s: %s", c.cfg.Type, err)
-	}
-	return nil
 }
