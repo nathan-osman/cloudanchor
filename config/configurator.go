@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,61 +20,35 @@ const (
 
 // Config stores the configuration for the configurator.
 type Config struct {
-	Type      string `json:"type"`
-	Directory string `json:"directory"`
-	Pidfile   string `json:"pidfile"`
+	Type    string `json:"type"`
+	File    string `json:"file"`
+	Pidfile string `json:"pidfile"`
 
 	ContainerStarted <-chan *watcher.Container
-	ContainerStopped <-chan *watcher.Container
+	ContainerStopped <-chan string
 	Reload           <-chan bool
 }
 
 // Configurator listens for the addition or removal of Docker containers and
 // adjusts the configuration for the managed web server.
 type Configurator struct {
-	cfg *Config
-	log *logrus.Entry
-	wg  sync.WaitGroup
+	mutex sync.Mutex
+	stop  chan bool
+	cList map[string]*watcher.Container
+	cfg   *Config
+	log   *logrus.Entry
 }
 
-// filename generates the absolute path to the configuration file for the
-// specified container.
-func (c *Configurator) filename(container *watcher.Container) string {
-	return path.Join(c.cfg.Directory, fmt.Sprintf("%s.conf", container.Name))
-}
-
-// createConfig creates a configuration file for the specified container.
-func (c *Configurator) createConfig(container *watcher.Container) error {
-	w, err := os.Create(c.filename(container))
+// writeTemplate writes the template to disk.
+func (c *Configurator) writeTemplate() error {
+	w, err := os.Create(c.cfg.File)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
-	return nginxTemplate.Execute(w, map[string]interface{}{
-		"domains": strings.Join(container.Domains, " "),
-		"domain":  container.Domains[0],
-		"port":    container.Port,
-	})
-}
-
-// runStart generates configuration files for containers.
-func (c *Configurator) runStart() {
-	defer c.wg.Done()
-	for container := range c.cfg.ContainerStarted {
-		if err := c.createConfig(container); err != nil {
-			c.log.Error(err)
-		}
-	}
-}
-
-// runStop removes configuration files for containers.
-func (c *Configurator) runStop() {
-	defer c.wg.Done()
-	for container := range c.cfg.ContainerStopped {
-		if err := os.Remove(c.filename(container)); err != nil {
-			c.log.Error(err)
-		}
-	}
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return tmpl.ExecuteTemplate(w, c.cfg.Type, c.cList)
 }
 
 // reload sends the SIGHUP signal to the web server process to inform it that
@@ -92,23 +65,38 @@ func (c *Configurator) reload() error {
 	return syscall.Kill(pid, syscall.SIGHUP)
 }
 
-// runReload reloads the server configuration upon request.
-func (c *Configurator) runReload() {
-	defer c.wg.Done()
-	for _ = range c.cfg.Reload {
-		if err := c.reload(); err != nil {
-			c.log.Error(err)
+// run processes events as they are received on the channels
+func (c *Configurator) run() {
+	defer close(c.stop)
+	for {
+		select {
+		case container := <-c.cfg.ContainerStarted:
+			c.mutex.Lock()
+			c.cList[container.ID] = container
+			c.mutex.Unlock()
+		case id := <-c.cfg.ContainerStopped:
+			c.mutex.Lock()
+			delete(c.cList, id)
+			c.mutex.Unlock()
+		case <-c.cfg.Reload:
+			if err := c.writeTemplate(); err != nil {
+				c.log.Error(err)
+			}
+			if err := c.reload(); err != nil {
+				c.log.Error(err)
+			}
+		case <-c.stop:
+			return
 		}
 	}
 }
 
-// New creates a new configurator using the provided configuration. Be sure to
-// call the Wait() method on the returned configurator when cleaning up.
+// New creates a new configurator using the provided configuration.
 func New(cfg *Config) (*Configurator, error) {
 	switch cfg.Type {
 	case Nginx:
-		if len(cfg.Directory) == 0 {
-			cfg.Directory = "/etc/nginx/sites-enabled"
+		if len(cfg.File) == 0 {
+			cfg.File = "/etc/nginx/sites-enabled/cloudanchor.conf"
 		}
 		if len(cfg.Pidfile) == 0 {
 			cfg.Pidfile = "/var/run/nginx.pid"
@@ -116,21 +104,18 @@ func New(cfg *Config) (*Configurator, error) {
 	default:
 		return nil, fmt.Errorf("unrecognized server type \"%s\"", cfg.Type)
 	}
-	if _, err := os.Stat(cfg.Directory); err != nil {
-		return nil, err
-	}
 	c := &Configurator{
-		cfg: cfg,
-		log: logrus.WithField("context", "watcher"),
+		stop:  make(chan bool),
+		cList: make(map[string]*watcher.Container),
+		cfg:   cfg,
+		log:   logrus.WithField("context", "config"),
 	}
-	c.wg.Add(3)
-	go c.runStart()
-	go c.runStop()
-	go c.runReload()
+	go c.run()
 	return c, nil
 }
 
-// Wait blocks until the configurator has finished shutting down.
-func (c *Configurator) Wait() {
-	c.wg.Wait()
+// Close shuts down the configurator.
+func (c *Configurator) Close() {
+	c.stop <- true
+	<-c.stop
 }
