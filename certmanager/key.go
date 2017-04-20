@@ -20,7 +20,7 @@ func (c *CertManager) writeKeys(key *rsa.PrivateKey, domains ...string) error {
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
 	for _, d := range domains {
-		if err := ioutil.WriteFile(c.filename(d, typeKey), b, 0600); err != nil {
+		if err := ioutil.WriteFile(c.Filename(d, TypeKey), b, 0600); err != nil {
 			return err
 		}
 	}

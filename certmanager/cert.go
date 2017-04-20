@@ -25,8 +25,12 @@ var (
 
 // performChallenge attempts to perform the specified challenge to verify a
 // domain name.
-func (c *CertManager) performChallenge(ctx *context.Context, chal *acme.Challenge) error {
-	b := []byte(c.client.HTTP01ChallengeResponse(chal.Token))
+func (c *CertManager) performChallenge(ctx context.Context, chal *acme.Challenge) error {
+	response, err := c.client.HTTP01ChallengeResponse(chal.Token)
+	if err != nil {
+		return err
+	}
+	b := []byte(response)
 	mux := http.NewServeMux()
 	mux.HandleFunc(
 		c.client.HTTP01ChallengePath(chal.Token),
@@ -54,7 +58,7 @@ func (c *CertManager) performChallenge(ctx *context.Context, chal *acme.Challeng
 
 // authorizeDomain attempts to authorize a domain name for use in a
 // certificate.
-func (c *CertManager) authorizeDomain(ctx *context.Context, domain string) error {
+func (c *CertManager) authorizeDomain(ctx context.Context, domain string) error {
 	a, err := c.client.Authorize(ctx, domain)
 	if err != nil {
 		return err
@@ -92,7 +96,7 @@ func (c *CertManager) writeCertificates(ders [][]byte, domains ...string) error 
 	}
 	b := buf.Bytes()
 	for _, d := range domains {
-		if err := ioutil.WriteFile(c.filename(d, typeCert), b, 0644); err != nil {
+		if err := ioutil.WriteFile(c.Filename(d, TypeCert), b, 0644); err != nil {
 			return err
 		}
 	}
@@ -101,7 +105,7 @@ func (c *CertManager) writeCertificates(ders [][]byte, domains ...string) error 
 
 // renew attempts to create a certificate for the specified domain names and
 // blocks until completion, an error, or the context is canceled.
-func (c *CertManager) renew(ctx *context.Context, domains ...string) error {
+func (c *CertManager) renew(ctx context.Context, domains ...string) error {
 	if len(domains) == 0 {
 		return errNoDomains
 	}
