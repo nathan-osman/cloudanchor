@@ -93,7 +93,7 @@ func (c *CertManager) writeCertificates(ders [][]byte, domains ...string) error 
 	b := buf.Bytes()
 	for _, d := range domains {
 		if err := ioutil.WriteFile(c.filename(d, typeCert), b, 0644); err != nil {
-			return error
+			return err
 		}
 	}
 	return nil
@@ -110,7 +110,7 @@ func (c *CertManager) renew(ctx *context.Context, domains ...string) error {
 			return err
 		}
 	}
-	k, err := generateKey()
+	k, err := c.generateKey()
 	if err != nil {
 		return err
 	}
