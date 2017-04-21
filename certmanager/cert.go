@@ -141,3 +141,10 @@ func (c *CertManager) renew(ctx context.Context, domains ...string) error {
 	}
 	return nil
 }
+
+// renewPending renews all domains that are active and near expiry. This also
+// includes domains which don't have a certificate.
+func (c *CertManager) renewPending(ctx context.Context) error {
+	///...
+	return nil
+}
