@@ -48,12 +48,11 @@ func (c *CertManager) loadCert(domain string) (*renewalTask, error) {
 
 // loadCerts parses the certificates in the directory. Any that are invalid are
 // removed to help keep things tidy.
-func (c *CertManager) loadCerts() (map[string]*renewalTask, error) {
+func (c *CertManager) loadCerts() error {
 	files, err := ioutil.ReadDir(c.cfg.Directory)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	tasks := make(map[string]*renewalTask)
 	for _, f := range files {
 		if !strings.HasSuffix(f.Name(), "."+TypeCert) {
 			continue
@@ -68,7 +67,7 @@ func (c *CertManager) loadCerts() (map[string]*renewalTask, error) {
 			os.Remove(c.Filename(domain, TypeCert))
 			continue
 		}
-		tasks[domain] = task
+		c.tasks[domain] = task
 	}
-	return tasks, nil
+	return nil
 }

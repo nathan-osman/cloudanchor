@@ -5,8 +5,30 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"io/ioutil"
 )
+
+const accountKey = "account"
+
+var errInvalidKey = errors.New("invalid private key")
+
+// loadAccountKey attempts to load the account key from disk.
+func (c *CertManager) loadAccountKey() (*rsa.PrivateKey, error) {
+	b, err := ioutil.ReadFile(c.Filename(accountKey, TypeKey))
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(b)
+	if block == nil || block.Type != "RSA PRIVATE KEY" {
+		return nil, errInvalidKey
+	}
+	k, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return k, nil
+}
 
 // generateKey creates a new RSA key.
 func (c *CertManager) generateKey() (*rsa.PrivateKey, error) {

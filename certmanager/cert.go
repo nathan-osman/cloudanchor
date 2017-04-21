@@ -64,7 +64,7 @@ func (c *CertManager) authorizeDomain(ctx context.Context, domain string) error 
 		return err
 	}
 	if a.Status == acme.StatusValid {
-		continue
+		return nil
 	}
 	var chal *acme.Challenge
 	for _, c := range a.Challenges {
