@@ -9,13 +9,11 @@ import (
 	"io/ioutil"
 )
 
-const accountKey = "account"
-
 var errInvalidKey = errors.New("invalid private key")
 
-// loadAccountKey attempts to load the account key from disk.
-func (c *CertManager) loadAccountKey() (*rsa.PrivateKey, error) {
-	b, err := ioutil.ReadFile(c.Filename(accountKey, TypeKey))
+// loadKey attempts to load the RSA key for a domain from disk.
+func (c *CertManager) loadKey(domain string) (*rsa.PrivateKey, error) {
+	b, err := ioutil.ReadFile(c.Filename(domain, TypeKey))
 	if err != nil {
 		return nil, err
 	}

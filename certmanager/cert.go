@@ -1,150 +1,78 @@
 package certmanager
 
 import (
-	"bytes"
-	"context"
-	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"io/ioutil"
-	"net"
-	"net/http"
-	"strconv"
+	"os"
+	"strings"
 	"time"
-
-	"golang.org/x/crypto/acme"
 )
 
-var (
-	errNoDomains    = errors.New("no domains specified")
-	errNoChallenges = errors.New("unable to find a suitable challenge")
-)
+var errInvalidCert = errors.New("invalid certificate")
 
-// performChallenge attempts to perform the specified challenge to verify a
-// domain name.
-func (c *CertManager) performChallenge(ctx context.Context, chal *acme.Challenge) error {
-	response, err := c.client.HTTP01ChallengeResponse(chal.Token)
-	if err != nil {
-		return err
+// loadX509 loads an x509 certificate from the provided data.
+func (c *CertManager) loadX509(data []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errInvalidCert
 	}
-	b := []byte(response)
-	mux := http.NewServeMux()
-	mux.HandleFunc(
-		c.client.HTTP01ChallengePath(chal.Token),
-		func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Length", strconv.Itoa(len(b)))
-			w.WriteHeader(http.StatusOK)
-			w.Write(b)
-		},
-	)
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", c.cfg.Port))
+	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer l.Close()
-	go func() {
-		http.Serve(l, mux)
-	}()
-	a, err := c.client.Accept(ctx, chal)
-	if err != nil {
-		return err
-	}
-	_, err = c.client.WaitAuthorization(ctx, a.URI)
-	return err
+	return cert, nil
 }
 
-// authorizeDomain attempts to authorize a domain name for use in a
-// certificate.
-func (c *CertManager) authorizeDomain(ctx context.Context, domain string) error {
-	a, err := c.client.Authorize(ctx, domain)
+// loadCert attempts to load a certificate for the specified domain. Basic
+// sanity checks are performed to ensure a private key is available and the
+// certificate has not expired.
+func (c *CertManager) loadCert(domain string) (*domainState, error) {
+	if _, err := os.Stat(c.Filename(domain, TypeKey)); err != nil {
+		return nil, err
+	}
+	b, err := ioutil.ReadFile(c.Filename(domain, TypeCert))
+	if err != nil {
+		return nil, err
+	}
+	cert, err := c.loadX509(b)
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().After(cert.NotAfter) {
+		return nil, errInvalidCert
+	}
+	return &domainState{
+		domain:  domain,
+		expires: cert.NotAfter,
+	}, nil
+}
+
+// loadCerts parses the certificates in the directory. Any that are invalid are
+// removed (along with any private key) to help keep things tidy.
+func (c *CertManager) loadCerts() error {
+	files, err := ioutil.ReadDir(c.cfg.Directory)
 	if err != nil {
 		return err
 	}
-	if a.Status == acme.StatusValid {
-		return nil
-	}
-	var chal *acme.Challenge
-	for _, c := range a.Challenges {
-		if c.Type == "http-01" {
-			chal = c
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name(), "."+TypeCert) {
+			continue
 		}
-	}
-	if chal == nil {
-		return errNoChallenges
-	}
-	if err := c.performChallenge(ctx, chal); err != nil {
-		return err
-	}
-	return nil
-}
-
-// writeCertificates writes a certificate bundle to disk for each of the
-// specified domain names.
-func (c *CertManager) writeCertificates(ders [][]byte, domains ...string) error {
-	buf := &bytes.Buffer{}
-	for _, b := range ders {
-		err := pem.Encode(buf, &pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: b,
-		})
+		domain, err := c.domain(f.Name())
 		if err != nil {
-			return err
+			continue
 		}
-	}
-	b := buf.Bytes()
-	for _, d := range domains {
-		if err := ioutil.WriteFile(c.Filename(d, TypeCert), b, 0644); err != nil {
-			return err
+		state, err := c.loadCert(domain)
+		if err != nil {
+			if err == errInvalidCert {
+				os.Remove(c.Filename(domain, TypeKey))
+				os.Remove(c.Filename(domain, TypeCert))
+			}
+			continue
 		}
+		c.states[domain] = state
 	}
-	return nil
-}
-
-// renew attempts to create a certificate for the specified domain names and
-// blocks until completion, an error, or the context is canceled.
-func (c *CertManager) renew(ctx context.Context, domains ...string) error {
-	if len(domains) == 0 {
-		return errNoDomains
-	}
-	for _, d := range domains {
-		if err := c.authorizeDomain(ctx, d); err != nil {
-			return err
-		}
-	}
-	k, err := c.generateKey()
-	if err != nil {
-		return err
-	}
-	csr, err := x509.CreateCertificateRequest(
-		rand.Reader,
-		&x509.CertificateRequest{
-			Subject:  pkix.Name{CommonName: domains[0]},
-			DNSNames: domains[1:],
-		},
-		k,
-	)
-	if err != nil {
-		return err
-	}
-	ders, _, err := c.client.CreateCert(ctx, csr, 90*24*time.Hour, true)
-	if err != nil {
-		return err
-	}
-	if err := c.writeKeys(k, domains...); err != nil {
-		return err
-	}
-	if err := c.writeCertificates(ders, domains...); err != nil {
-		return err
-	}
-	return nil
-}
-
-// renewPending renews all domains that are active and near expiry. This also
-// includes domains which don't have a certificate.
-func (c *CertManager) renewPending(ctx context.Context) error {
-	///...
 	return nil
 }
