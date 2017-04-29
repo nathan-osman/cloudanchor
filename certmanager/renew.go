@@ -90,7 +90,7 @@ func (c *CertManager) authorizeDomain(ctx context.Context, domain string) error 
 // writeCertificates writes a certificate bundle to disk for each of the
 // specified domain names and updates its state.
 func (c *CertManager) writeCertificates(ders [][]byte, domains ...string) error {
-	cert, err := c.loadX509(ders[0])
+	cert, err := x509.ParseCertificate(ders[0])
 	if err != nil {
 		return err
 	}

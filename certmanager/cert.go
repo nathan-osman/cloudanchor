@@ -12,19 +12,6 @@ import (
 
 var errInvalidCert = errors.New("invalid certificate")
 
-// loadX509 loads an x509 certificate from the provided data.
-func (c *CertManager) loadX509(data []byte) (*x509.Certificate, error) {
-	block, _ := pem.Decode(data)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, errInvalidCert
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return cert, nil
-}
-
 // loadCert attempts to load a certificate for the specified domain. Basic
 // sanity checks are performed to ensure a private key is available and the
 // certificate has not expired.
@@ -36,7 +23,11 @@ func (c *CertManager) loadCert(domain string) (*domainState, error) {
 	if err != nil {
 		return nil, err
 	}
-	cert, err := c.loadX509(b)
+	block, _ := pem.Decode(b)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errInvalidCert
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return nil, err
 	}
