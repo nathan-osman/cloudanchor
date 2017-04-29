@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/nathan-osman/cloudanchor/configurator"
 	"github.com/nathan-osman/cloudanchor/container"
+	"github.com/sirupsen/logrus"
 )
 
 // Config stores the configuration for the watcher.
@@ -20,20 +20,21 @@ type Config struct {
 // Watcher monitors the Docker daemon for containers starting and stopping. The
 // watcher will reconnect to the daemon if disconnected unexpectedly.
 type Watcher struct {
-	stop chan bool
-	conf *configurator.Configurator
-	cfg  *Config
-	log  *logrus.Entry
+	stopCh    chan bool
+	stoppedCh chan bool
+	conf      *configurator.Configurator
+	log       *logrus.Entry
+	client    *client.Client
 }
 
 // processContainers obtains a list of containers already running and adds them
 // to the configurator.
-func (w *Watcher) processContainers(dClient *client.Client) error {
-	dContainers, err := dClient.ContainerList(context.TODO(), types.ContainerListOptions{})
+func (w *Watcher) processContainers(ctx context.Context) error {
+	containers, err := w.client.ContainerList(ctx, types.ContainerListOptions{})
 	if err != nil {
 		return err
 	}
-	for _, c := range dContainers {
+	for _, c := range containers {
 		if cont := container.New(c.ID, c.Labels); cont != nil {
 			w.conf.Add(cont)
 		}
@@ -43,24 +44,20 @@ func (w *Watcher) processContainers(dClient *client.Client) error {
 }
 
 // processEvents continues to process events from the client until an error
-// occurs or the watcher is closed. The return value is true if the watcher
-// should reconnect.
-func (w *Watcher) processEvents(dClient *client.Client) bool {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// occurs or the watcher is closed.
+func (w *Watcher) processEvents(ctx context.Context) error {
 	f := filters.NewArgs()
 	f.Add("event", "start")
 	f.Add("event", "die")
-	msgChan, errChan := dClient.Events(ctx, types.EventsOptions{Filters: f})
+	msgChan, errChan := w.client.Events(ctx, types.EventsOptions{Filters: f})
 	for {
 		select {
 		case m := <-msgChan:
 			switch m.Action {
 			case "start":
-				cJSON, err := dClient.ContainerInspect(context.TODO(), m.ID)
+				cJSON, err := w.client.ContainerInspect(ctx, m.ID)
 				if err != nil {
-					w.log.Warning(err)
-					continue
+					return err
 				}
 				if cont := container.New(cJSON.ID, cJSON.Config.Labels); cont != nil {
 					w.conf.Add(cont)
@@ -71,10 +68,9 @@ func (w *Watcher) processEvents(dClient *client.Client) bool {
 				w.conf.Reload()
 			}
 		case err := <-errChan:
-			w.log.Error(err)
-			return true
-		case <-w.stop:
-			return false
+			return err
+		case <-w.stopCh:
+			return nil
 		}
 	}
 }
@@ -82,27 +78,29 @@ func (w *Watcher) processEvents(dClient *client.Client) bool {
 // run maintains a persistent connection to the Docker daemon and watches for
 // containers being started and stopped.
 func (w *Watcher) run() {
-	defer close(w.stop)
+	defer close(w.stoppedCh)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-w.stopCh
+		cancel()
+	}()
 	for {
-		c, err := client.NewClient(w.cfg.Host, "1.24", nil, nil)
-		if err != nil {
-			w.log.Error(err)
-			goto error
+		var err error
+		if err = w.processContainers(ctx); err != nil {
+			goto retry
 		}
-		w.log.Info("connected to daemon")
-		if err := w.processContainers(c); err != nil {
-			w.log.Error(err)
-			goto error
+		if err = w.processEvents(ctx); err != nil {
+			goto retry
 		}
-		if !w.processEvents(c) {
-			c.Close()
+		return
+	retry:
+		if err == context.Canceled {
 			return
 		}
-	error:
-		w.log.Info("reconnecting in 30 seconds")
+		w.log.Error(err)
 		select {
 		case <-time.After(30 * time.Second):
-		case <-w.stop:
+		case <-w.stopCh:
 			return
 		}
 	}
@@ -110,19 +108,24 @@ func (w *Watcher) run() {
 
 // New creates a new Watcher and immediately begins the process of connecting
 // to the Docker daemon.
-func New(conf *configurator.Configurator, cfg *Config) *Watcher {
+func New(conf *configurator.Configurator, cfg *Config) (*Watcher, error) {
+	c, err := client.NewClient(cfg.Host, "1.24", nil, nil)
+	if err != nil {
+		return nil, err
+	}
 	w := &Watcher{
-		stop: make(chan bool),
-		conf: conf,
-		cfg:  cfg,
-		log:  logrus.WithField("context", "watcher"),
+		stopCh:    make(chan bool),
+		stoppedCh: make(chan bool),
+		conf:      conf,
+		log:       logrus.WithField("context", "watcher"),
+		client:    c,
 	}
 	go w.run()
-	return w
+	return w, nil
 }
 
 // Close shuts down the watcher.
 func (w *Watcher) Close() {
-	w.stop <- true
-	<-w.stop
+	close(w.stopCh)
+	<-w.stoppedCh
 }
