@@ -126,9 +126,17 @@ func (c *Configurator) run() {
 
 // New creates a new configurator instance.
 func New(ctx context.Context, type_, file, pidfile, addr, dir string) (*Configurator, error) {
-
-	//...
-
+	switch type_ {
+	case Nginx:
+		if len(file) == 0 {
+			file = "/etc/nginx/sites-enabled/cloudanchor.conf"
+		}
+		if len(pidfile) == 0 {
+			pidfile = "/var/run/nginx.pid"
+		}
+	default:
+		return nil, fmt.Errorf("unrecognized server type \"%s\"", type_)
+	}
 	c := &Configurator{
 		stop:       make(chan bool),
 		stopped:    make(chan bool),
