@@ -1,6 +1,7 @@
 package configurator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -9,120 +10,169 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/nathan-osman/cloudanchor/container"
+	"github.com/nathan-osman/go-simpleacme/manager"
 )
 
 const (
 	Nginx = "nginx"
 )
 
-// Config stores the configuration for the configurator.
-type Config struct {
-	Type    string `json:"type"`
-	File    string `json:"file"`
-	Pidfile string `json:"pidfile"`
-}
-
-// Configurator maintains a list of running containers and generates
-// the appropriate web server configuration file on-demand.
 type Configurator struct {
 	mutex      sync.Mutex
 	stop       chan bool
+	stopped    chan bool
+	add        chan *container.Container
+	remove     chan string
+	type_      string
+	file       string
+	pidfile    string
+	addr       string
+	dir        string
+	mgr        *manager.Manager
 	containers map[string]*container.Container
-	cfg        *Config
-	log        *logrus.Entry
 }
 
-// writeTemplate writes the template to disk.
-func (c *Configurator) writeTemplate() error {
-	w, err := os.Create(c.cfg.File)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-	return tmpl.ExecuteTemplate(w, c.cfg.Type, c.Containers())
-}
-
-// reload attempts to reload the web server configuration.
+// reload instructs the server to reload its configuration.
 func (c *Configurator) reload() error {
-	b, err := ioutil.ReadFile(c.cfg.Pidfile)
+	b, err := ioutil.ReadFile(c.pidfile)
 	if err != nil {
-		return fmt.Errorf("unable to read pidfile: %s", err)
+		return fmt.Errorf("unable to open pidfile: %s", err)
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 	if pid == 0 {
-		return errors.New("pidfile is corrupt")
+		return errors.New("unable to read pidfile")
 	}
 	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("unable to restart %s: %s", c.cfg.Type, err)
+		return fmt.Errorf("unable to reload: %s", err)
 	}
 	return nil
 }
 
-// New creates a new configurator using the provided configuration.
-func New(cfg *Config) (*Configurator, error) {
-	switch cfg.Type {
-	case Nginx:
-		if len(cfg.File) == 0 {
-			cfg.File = "/etc/nginx/sites-enabled/cloudanchor.conf"
-		}
-		if len(cfg.Pidfile) == 0 {
-			cfg.Pidfile = "/var/run/nginx.pid"
-		}
-	default:
-		return nil, fmt.Errorf("unrecognized server type \"%s\"", cfg.Type)
+// callback updates the template and triggers a server reload.
+func (c *Configurator) callback(...string) error {
+	w, err := os.Create(c.file)
+	if err != nil {
+		return err
 	}
-	return &Configurator{
-		stop:       make(chan bool),
-		containers: make(map[string]*container.Container),
-		cfg:        cfg,
-		log:        logrus.WithField("context", "config"),
-	}, nil
-}
-
-// Add adds the container to the list of those managed by the web server. The
-// changes are not applied until the Reload() method is invoked. This method is
-// thread-safe.
-func (c *Configurator) Add(cont *container.Container) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.containers[cont.ID] = cont
-}
-
-// Remove removes the container from the list of those managed by the web
-// server. The changes are not applied until the Reload() method is invoked.
-// This method is thread-safe.
-func (c *Configurator) Remove(id string) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	delete(c.containers, id)
-}
-
-// Containers returns a list of all running containers. This method is
-// thread-safe.
-func (c *Configurator) Containers() []*container.Container {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	var (
-		containers = make([]*container.Container, len(c.containers))
-		i          = 0
-	)
+	defer w.Close()
+	tmpls := []*domainTmpl{}
 	for _, cont := range c.containers {
-		containers[i] = cont
-		i += 1
+		for _, d := range cont.Domains {
+			tmpls = append(tmpls, &domainTmpl{
+				Name: d,
+				Port: cont.Port,
+				Key:  c.mgr.Key(d),
+				Cert: c.mgr.Cert(d),
+			})
+		}
 	}
-	return containers
+	vars := map[string]interface{}{
+		"domains": tmpls,
+		"addr":    c.addr,
+	}
+	if err := tmpl.ExecuteTemplate(w, c.type_, vars); err != nil {
+		return err
+	}
+	return c.reload()
 }
 
-// Reload generates the configuration file for the web server and applies it.
-// This method is thread-safe.
-func (c *Configurator) Reload() {
-	if err := c.writeTemplate(); err != nil {
-		c.log.Error(err)
+// run responds to container changes and restarts the server.
+func (c *Configurator) run() {
+	defer close(c.stopped)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-c.stop
+		cancel()
+	}()
+	var (
+		pendingContainers = make(map[string]*container.Container)
+		pendingTrigger    <-chan time.Time
+	)
+	for {
+		select {
+		case cont := <-c.add:
+			pendingContainers[cont.ID] = cont
+			pendingTrigger = time.After(10 * time.Second)
+		case id := <-c.remove:
+			delete(pendingContainers, id)
+			func() {
+				c.mutex.Lock()
+				defer c.mutex.Unlock()
+				delete(c.containers, id)
+			}()
+		case <-pendingTrigger:
+			domains := []string{}
+			func() {
+				c.mutex.Lock()
+				defer c.mutex.Unlock()
+				for d, cont := range pendingContainers {
+					domains = append(domains, d)
+					c.containers[cont.ID] = cont
+				}
+			}()
+			go func() {
+				c.mgr.Add(ctx, domains...)
+			}()
+			pendingContainers = make(map[string]*container.Container)
+			pendingTrigger = nil
+		case <-ctx.Done():
+			return
+		}
 	}
-	if err := c.reload(); err != nil {
-		c.log.Error(err)
+}
+
+// New creates a new configurator instance.
+func New(ctx context.Context, type_, file, pidfile, addr, dir string) (*Configurator, error) {
+
+	//...
+
+	c := &Configurator{
+		stop:       make(chan bool),
+		stopped:    make(chan bool),
+		add:        make(chan *container.Container),
+		remove:     make(chan string),
+		type_:      type_,
+		file:       file,
+		pidfile:    pidfile,
+		addr:       addr,
+		dir:        dir,
+		containers: make(map[string]*container.Container),
 	}
+	m, err := manager.New(ctx, addr, dir, c.callback)
+	if err != nil {
+		return nil, err
+	}
+	c.mgr = m
+	go c.run()
+	return c, nil
+}
+
+// Add adds a domain to the configurator.
+func (c *Configurator) Add(ctx context.Context, cont *container.Container) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.add <- cont:
+		return nil
+	}
+}
+
+// Remove removes a domain from the configurator.
+func (c *Configurator) Remove(ctx context.Context, id string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.remove <- id:
+		return nil
+	}
+}
+
+// Close shuts down the configurator.
+func (c *Configurator) Close() {
+	close(c.stop)
+	<-c.stopped
+	c.mgr.Close()
 }
