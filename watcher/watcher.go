@@ -36,10 +36,10 @@ func (w *Watcher) processContainers(ctx context.Context) error {
 	}
 	for _, c := range containers {
 		if cont := container.New(c.ID, c.Labels); cont != nil {
-			w.conf.Add(cont)
+			w.log.Debugf("container %s found running", cont.ID)
+			w.conf.Add(ctx, cont)
 		}
 	}
-	w.conf.Reload()
 	return nil
 }
 
@@ -55,21 +55,21 @@ func (w *Watcher) processEvents(ctx context.Context) error {
 		case m := <-msgChan:
 			switch m.Action {
 			case "start":
+				w.log.Debugf("container %s started", m.ID)
 				cJSON, err := w.client.ContainerInspect(ctx, m.ID)
 				if err != nil {
 					return err
 				}
 				if cont := container.New(cJSON.ID, cJSON.Config.Labels); cont != nil {
-					w.conf.Add(cont)
-					w.conf.Reload()
+					w.conf.Add(ctx, cont)
 				}
 			case "die":
-				w.conf.Remove(m.ID)
-				w.conf.Reload()
+				w.log.Debugf("container %s died", m.ID)
+				w.conf.Remove(ctx, m.ID)
 			}
 		case err := <-errChan:
 			return err
-		case <-w.stopCh:
+		case <-ctx.Done():
 			return nil
 		}
 	}
@@ -100,7 +100,7 @@ func (w *Watcher) run() {
 		w.log.Error(err)
 		select {
 		case <-time.After(30 * time.Second):
-		case <-w.stopCh:
+		case <-ctx.Done():
 			return
 		}
 	}
