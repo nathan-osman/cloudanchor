@@ -28,12 +28,15 @@ server {
     listen 80;
     listen [::]:80;
     server_name {{$d.Name}};
-{{if eq $d.EnableTLS false}}
+{{if $d.EnableTLS}}
+    location / {
+        return 301 https://{{$d.Name}};
+    }
+{{else}}
     location /.well-known {
         proxy_pass http://{{$d.Addr}};
     }
 {{end}}
-    return 301 https://{{$d.Name}};
 }
 {{if $d.EnableTLS}}
 server {
