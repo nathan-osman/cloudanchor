@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	Nginx = "nginx"
+	Apache = "apache"
+	Nginx  = "nginx"
 )
 
 type Configurator struct {
