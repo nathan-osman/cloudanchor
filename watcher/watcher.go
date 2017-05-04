@@ -27,6 +27,19 @@ type Watcher struct {
 	client    *client.Client
 }
 
+// addContainer checks if the container should be monitored by cloudanchor and
+// if so, adds it.
+func (w *Watcher) addContainer(ctx context.Context, id string) error {
+	cJSON, err := w.client.ContainerInspect(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	if cont := container.New(cJSON); cont != nil {
+		w.conf.Add(ctx, cont)
+	}
+	return nil
+}
+
 // processContainers obtains a list of containers already running and adds them
 // to the configurator.
 func (w *Watcher) processContainers(ctx context.Context) error {
@@ -35,9 +48,8 @@ func (w *Watcher) processContainers(ctx context.Context) error {
 		return err
 	}
 	for _, c := range containers {
-		if cont := container.New(c.ID, c.Labels); cont != nil {
-			w.log.Debugf("container %s found running", cont.ID)
-			w.conf.Add(ctx, cont)
+		if err := w.addContainer(ctx, c.ID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -56,12 +68,8 @@ func (w *Watcher) processEvents(ctx context.Context) error {
 			switch m.Action {
 			case "start":
 				w.log.Debugf("container %s started", m.ID)
-				cJSON, err := w.client.ContainerInspect(ctx, m.ID)
-				if err != nil {
+				if err := w.addContainer(ctx, m.ID); err != nil {
 					return err
-				}
-				if cont := container.New(cJSON.ID, cJSON.Config.Labels); cont != nil {
-					w.conf.Add(ctx, cont)
 				}
 			case "die":
 				w.log.Debugf("container %s died", m.ID)

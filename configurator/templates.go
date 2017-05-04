@@ -10,10 +10,10 @@ var tmpl *template.Template
 // container.
 type domainTmpl struct {
 	Name      string
-	Port      int
+	Addr      string
 	Key       string
 	Cert      string
-	Addr      string
+	AuthAddr  string
 	EnableTLS bool
 }
 
@@ -41,7 +41,7 @@ server {
     }
 {{else}}
     location /.well-known/ {
-        proxy_pass http://{{$d.Addr}};
+        proxy_pass http://{{$d.AuthAddr}};
     }
 {{end}}
 }
@@ -52,13 +52,13 @@ server {
     server_name {{$d.Name}};
 
     location / {
-        proxy_pass http://127.0.0.1:{{$d.Port}};
+        proxy_pass http://{{$d.Addr}};
         proxy_http_version 1.1
-        proxy_set_header Host             $host;
-        proxy_set_header X-Real-IP        $remote_addr;
-        proxy_set_header X-Forwarded-For  $proxy_add_x_forwarded_for
-        proxy_set_header Upgrade          $http_upgrade;
-        proxy_set_header Connection       $connection_upgrade;
+        proxy_set_header Host            $host;
+        proxy_set_header X-Real-IP       $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for
+        proxy_set_header Upgrade         $http_upgrade;
+        proxy_set_header Connection      $connection_upgrade;
     }
 
     ssl on;

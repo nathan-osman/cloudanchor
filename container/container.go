@@ -1,38 +1,33 @@
 package container
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/docker/docker/api/types"
 )
 
 const (
-	labelName    = "cloudanchor.name"
 	labelDomains = "cloudanchor.domains"
 	labelPort    = "cloudanchor.port"
 )
 
 // Container stores the configuration for a container.
 type Container struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Domains []string `json:"domains"`
-	Port    int      `json:"port"`
+	ID      string
+	Name    string
+	Domains []string
+	Addr    string
 }
 
 // New attempts to create a new container from the provided information. The
 // return value is nil if required information for the container is missing.
-func New(id string, labels map[string]string) *Container {
-
-	// Name is a required label; its absence suggests that the container was
-	// not intended to be used with cloudanchor
-	name, ok := labels[labelName]
-	if !ok {
-		return nil
-	}
+func New(cJSON types.ContainerJSON) *Container {
 
 	// The domain label is required as well; domains are comma-separated and
 	// excess space should be trimmed from them
-	domainStr, ok := labels[labelDomains]
+	domainStr, ok := cJSON.Config.Labels[labelDomains]
 	if !ok {
 		return nil
 	}
@@ -41,9 +36,9 @@ func New(id string, labels map[string]string) *Container {
 		domains = append(domains, strings.TrimSpace(d))
 	}
 
-	// Lastly, port is required; the reverse proxy will use this port for
-	// issuing requests to the backend
-	portStr, ok := labels[labelPort]
+	// Port is also required; the reverse proxy will use this port for issuing
+	// requests to the backend
+	portStr, ok := cJSON.Config.Labels[labelPort]
 	if !ok {
 		return nil
 	}
@@ -53,10 +48,11 @@ func New(id string, labels map[string]string) *Container {
 		return nil
 	}
 
+	// Create the container
 	return &Container{
-		ID:      id,
-		Name:    name,
+		ID:      cJSON.ID,
+		Name:    cJSON.Name,
 		Domains: domains,
-		Port:    port,
+		Addr:    fmt.Sprintf("%s:%d", cJSON.NetworkSettings.IPAddress, port),
 	}
 }

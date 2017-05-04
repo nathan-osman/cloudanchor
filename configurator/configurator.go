@@ -66,10 +66,10 @@ func (c *Configurator) writeConfig(enableTLS bool) error {
 		for _, d := range cont.Domains {
 			tmpls = append(tmpls, &domainTmpl{
 				Name:      d,
-				Port:      cont.Port,
+				Addr:      cont.Addr,
 				Key:       c.mgr.Key(d),
 				Cert:      c.mgr.Cert(d),
-				Addr:      c.addr,
+				AuthAddr:  c.addr,
 				EnableTLS: enableTLS,
 			})
 		}
