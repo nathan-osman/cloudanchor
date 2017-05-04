@@ -14,6 +14,7 @@ import (
 
 	"github.com/nathan-osman/cloudanchor/container"
 	"github.com/nathan-osman/go-simpleacme/manager"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -31,6 +32,7 @@ type Configurator struct {
 	pidfile    string
 	addr       string
 	dir        string
+	log        *logrus.Entry
 	mgr        *manager.Manager
 	containers map[string]*container.Container
 }
@@ -71,15 +73,15 @@ func (c *Configurator) writeConfig(enableTLS bool) error {
 			})
 		}
 	}
-	return tmpl.ExecuteTemplate(w, c.type_, tmpls)
+	if err := tmpl.ExecuteTemplate(w, c.type_, tmpls); err != nil {
+		return err
+	}
+	return c.reload()
 }
 
 // callback updates the config file and triggers a server reload.
 func (c *Configurator) callback(...string) error {
-	if err := c.writeConfig(true); err != nil {
-		return err
-	}
-	return c.reload()
+	return c.writeConfig(true)
 }
 
 // run responds to container changes and restarts the server.
@@ -117,6 +119,7 @@ func (c *Configurator) run() {
 				}
 			}()
 			if err := c.writeConfig(false); err != nil {
+				c.log.Error(err)
 				continue
 			}
 			go func() {
@@ -153,6 +156,7 @@ func New(ctx context.Context, type_, file, pidfile, addr, dir string) (*Configur
 		pidfile:    pidfile,
 		addr:       addr,
 		dir:        dir,
+		log:        logrus.WithField("context", "configurator"),
 		containers: make(map[string]*container.Container),
 	}
 	m, err := manager.New(ctx, addr, dir, c.callback)
