@@ -30,7 +30,7 @@ type Watcher struct {
 // addContainer checks if the container should be monitored by cloudanchor and
 // if so, adds it.
 func (w *Watcher) addContainer(ctx context.Context, id string) error {
-	cJSON, err := w.client.ContainerInspect(ctx, m.ID)
+	cJSON, err := w.client.ContainerInspect(ctx, id)
 	if err != nil {
 		return err
 	}
