@@ -66,14 +66,11 @@ func (c *Configurator) callback(...string) error {
 				Port: cont.Port,
 				Key:  c.mgr.Key(d),
 				Cert: c.mgr.Cert(d),
+				Addr: c.addr,
 			})
 		}
 	}
-	vars := map[string]interface{}{
-		"domains": tmpls,
-		"addr":    c.addr,
-	}
-	if err := tmpl.ExecuteTemplate(w, c.type_, vars); err != nil {
+	if err := tmpl.ExecuteTemplate(w, c.type_, tmpls); err != nil {
 		return err
 	}
 	return c.reload()
@@ -108,11 +105,14 @@ func (c *Configurator) run() {
 			func() {
 				c.mutex.Lock()
 				defer c.mutex.Unlock()
-				for d, cont := range pendingContainers {
-					domains = append(domains, d)
+				for _, cont := range pendingContainers {
+					domains = append(domains, cont.Domains...)
 					c.containers[cont.ID] = cont
 				}
 			}()
+			if err := c.callback(); err != nil {
+				continue
+			}
 			go func() {
 				c.mgr.Add(ctx, domains...)
 			}()

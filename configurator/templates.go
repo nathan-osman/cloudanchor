@@ -1,34 +1,47 @@
 package configurator
 
 import (
-	"strings"
 	"text/template"
 )
 
 var tmpl *template.Template
 
+// domainTmpl provides the template with the information it needs for a
+// container.
+type domainTmpl struct {
+	Name string
+	Port int
+	Key  string
+	Cert string
+	Addr string
+}
+
 func init() {
-	tmpl = template.New("nginx").Funcs(template.FuncMap{
-		"join": strings.Join,
-	})
+	tmpl = template.New("nginx")
 	template.Must(tmpl.Parse(
 		`# AUTO GENERATED FILE
 
-{{range $c := .}}
-# {{$c.Name}}
-
+{{range $d := .}}
+# {{$d.Name}}
 server {
     listen 80;
     listen [::]:80;
-    server_name {{join $c.Domains " "}};
-    return 301 https://{{index $c.Domains 0}};
+    server_name {{$d.Name}};
+    return 301 https://{{$d.Name}};
 }
-
 server {
     listen 443 ssl;
     listen [::]:443;
-    server_name {{join $c.Domains " "}};
-    proxy_pass http://127.0.0.1:{{$c.Port}};
+    server_name {{$d.Name}};
+    proxy_pass http://127.0.0.1:{{$d.Port}};
+
+    location /.well-known {
+        proxy_pass http://{{$d.Addr}};
+    }
+
+    ssl on;
+    ssl_certificate {{$d.Cert}};
+    ssl_certificate_key {{$d.Key}};
 }
 {{end}}`,
 	))
