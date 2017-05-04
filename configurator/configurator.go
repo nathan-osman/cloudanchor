@@ -22,6 +22,8 @@ const (
 	Nginx  = "nginx"
 )
 
+// Configurator updates server configuration changes when containers are
+// started and stopped.
 type Configurator struct {
 	mutex      sync.Mutex
 	stop       chan bool
@@ -36,6 +38,7 @@ type Configurator struct {
 	log        *logrus.Entry
 	mgr        *manager.Manager
 	containers map[string]*container.Container
+	tlsDomains map[string]bool
 }
 
 // reload instructs the server to reload its configuration.
@@ -55,25 +58,30 @@ func (c *Configurator) reload() error {
 }
 
 // writeConfig writes the server configuration to disk.
-func (c *Configurator) writeConfig(enableTLS bool) error {
+func (c *Configurator) writeConfig() error {
+	c.log.Debugf("writing %s configuration file", c.type_)
 	w, err := os.Create(c.file)
 	if err != nil {
 		return err
 	}
 	defer w.Close()
 	tmpls := []*domainTmpl{}
-	for _, cont := range c.containers {
-		for _, d := range cont.Domains {
-			tmpls = append(tmpls, &domainTmpl{
-				Name:      d,
-				Addr:      cont.Addr,
-				Key:       c.mgr.Key(d),
-				Cert:      c.mgr.Cert(d),
-				AuthAddr:  c.addr,
-				EnableTLS: enableTLS,
-			})
+	func() {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+		for _, cont := range c.containers {
+			for _, d := range cont.Domains {
+				tmpls = append(tmpls, &domainTmpl{
+					Name:      d,
+					Addr:      cont.Addr,
+					Key:       c.mgr.Key(d),
+					Cert:      c.mgr.Cert(d),
+					AuthAddr:  c.addr,
+					EnableTLS: c.tlsDomains[d],
+				})
+			}
 		}
-	}
+	}()
 	if err := tmpl.ExecuteTemplate(w, c.type_, tmpls); err != nil {
 		return err
 	}
@@ -81,8 +89,47 @@ func (c *Configurator) writeConfig(enableTLS bool) error {
 }
 
 // callback updates the config file and triggers a server reload.
-func (c *Configurator) callback(...string) error {
-	return c.writeConfig(true)
+func (c *Configurator) callback(domains ...string) error {
+	func() {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+		for _, d := range domains {
+			c.tlsDomains[d] = true
+		}
+	}()
+	return c.writeConfig()
+}
+
+// addContainers adds containers to the configurator.
+func (c *Configurator) addContainers(ctx context.Context, containers map[string]*container.Container) error {
+	domains := []string{}
+	func() {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+		for _, cont := range containers {
+			domains = append(domains, cont.Domains...)
+			c.containers[cont.ID] = cont
+		}
+	}()
+	if err := c.writeConfig(); err != nil {
+		return err
+	}
+	go func() {
+		c.mgr.Add(ctx, domains...)
+	}()
+	return nil
+}
+
+// removeContainer removes a container from the configurator.
+func (c *Configurator) removeContainer(id string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if cont, ok := c.containers[id]; ok {
+		for _, d := range cont.Domains {
+			delete(c.tlsDomains, d)
+		}
+		delete(c.containers, id)
+	}
 }
 
 // run responds to container changes and restarts the server.
@@ -104,28 +151,13 @@ func (c *Configurator) run() {
 			pendingTrigger = time.After(10 * time.Second)
 		case id := <-c.remove:
 			delete(pendingContainers, id)
-			func() {
-				c.mutex.Lock()
-				defer c.mutex.Unlock()
-				delete(c.containers, id)
-			}()
+			c.removeContainer(id)
 		case <-pendingTrigger:
-			domains := []string{}
-			func() {
-				c.mutex.Lock()
-				defer c.mutex.Unlock()
-				for _, cont := range pendingContainers {
-					domains = append(domains, cont.Domains...)
-					c.containers[cont.ID] = cont
-				}
-			}()
-			if err := c.writeConfig(false); err != nil {
+			c.log.Debugf("adding %d containers", len(pendingContainers))
+			if err := c.addContainers(ctx, pendingContainers); err != nil {
 				c.log.Error(err)
 				continue
 			}
-			go func() {
-				c.mgr.Add(ctx, domains...)
-			}()
 			pendingContainers = make(map[string]*container.Container)
 			pendingTrigger = nil
 		case <-ctx.Done():
@@ -159,6 +191,7 @@ func New(ctx context.Context, type_, file, pidfile, addr, dir string) (*Configur
 		dir:        dir,
 		log:        logrus.WithField("context", "configurator"),
 		containers: make(map[string]*container.Container),
+		tlsDomains: make(map[string]bool),
 	}
 	m, err := manager.New(ctx, addr, dir, c.callback)
 	if err != nil {
