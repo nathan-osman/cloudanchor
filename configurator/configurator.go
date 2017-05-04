@@ -51,8 +51,8 @@ func (c *Configurator) reload() error {
 	return nil
 }
 
-// callback updates the template and triggers a server reload.
-func (c *Configurator) callback(...string) error {
+// writeConfig writes the server configuration to disk.
+func (c *Configurator) writeConfig(enableTLS bool) error {
 	w, err := os.Create(c.file)
 	if err != nil {
 		return err
@@ -62,15 +62,21 @@ func (c *Configurator) callback(...string) error {
 	for _, cont := range c.containers {
 		for _, d := range cont.Domains {
 			tmpls = append(tmpls, &domainTmpl{
-				Name: d,
-				Port: cont.Port,
-				Key:  c.mgr.Key(d),
-				Cert: c.mgr.Cert(d),
-				Addr: c.addr,
+				Name:      d,
+				Port:      cont.Port,
+				Key:       c.mgr.Key(d),
+				Cert:      c.mgr.Cert(d),
+				Addr:      c.addr,
+				EnableTLS: enableTLS,
 			})
 		}
 	}
-	if err := tmpl.ExecuteTemplate(w, c.type_, tmpls); err != nil {
+	return tmpl.ExecuteTemplate(w, c.type_, tmpls)
+}
+
+// callback updates the config file and triggers a server reload.
+func (c *Configurator) callback(...string) error {
+	if err := c.writeConfig(true); err != nil {
 		return err
 	}
 	return c.reload()
@@ -110,7 +116,7 @@ func (c *Configurator) run() {
 					c.containers[cont.ID] = cont
 				}
 			}()
-			if err := c.callback(); err != nil {
+			if err := c.writeConfig(false); err != nil {
 				continue
 			}
 			go func() {
