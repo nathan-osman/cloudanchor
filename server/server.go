@@ -3,13 +3,15 @@ package server
 import (
 	"net"
 	"net/http"
+
+	"github.com/gorilla/mux"
 )
 
 // Server provides a web interface for interacting with the application.
 type Server struct {
 	stopped  chan bool
-	mux      *http.ServeMux
-	l        net.Listener
+	router   *mux.Router
+	listener net.Listener
 	username string
 	password string
 }
@@ -21,15 +23,16 @@ func New(addr, username, password string) (*Server, error) {
 		return nil, err
 	}
 	var (
-		mux = http.NewServeMux()
-		srv = http.Server{}
-		s   = &Server{
-			stopped: make(chan bool),
-			mux:     mux,
-			l:       l,
+		srv    = http.Server{}
+		router = mux.NewRouter()
+		s      = &Server{
+			stopped:  make(chan bool),
+			router:   router,
+			listener: l,
 		}
 	)
 	srv.Handler = s
+	router.PathPrefix("/static").Handler(http.FileServer(HTTP))
 	go func() {
 		defer close(s.stopped)
 		srv.Serve(l)
@@ -48,11 +51,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.mux.ServeHTTP(w, r)
+	s.router.ServeHTTP(w, r)
 }
 
 // Close shuts down the server.
 func (s *Server) Close() {
-	s.l.Close()
+	s.listener.Close()
 	<-s.stopped
 }
