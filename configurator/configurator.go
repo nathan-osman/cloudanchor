@@ -89,6 +89,7 @@ func (c *Configurator) writeConfig() error {
 
 // callback updates the config file and triggers a server reload.
 func (c *Configurator) callback(domains ...string) {
+	c.log.Debug("certificates loaded for %d domain(s)", len(domains))
 	func() {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
@@ -119,13 +120,16 @@ func (c *Configurator) removeContainer(ctx context.Context, id string) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if cont, ok := c.containers[id]; ok {
-		if err := c.mgr.Remove(ctx, cont.Domains...); err != nil {
-			return err
-		}
 		for _, d := range cont.Domains {
 			delete(c.tlsDomains, d)
 		}
 		delete(c.containers, id)
+		if err := c.writeConfig(); err != nil {
+			return err
+		}
+		if err := c.mgr.Remove(ctx, cont.Domains...); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -151,6 +155,7 @@ func (c *Configurator) run() {
 		if err == context.Canceled {
 			return
 		}
+		c.log.Error(err)
 	}
 }
 
@@ -188,6 +193,17 @@ func New(ctx context.Context, type_, file, pidfile, addr, dir string) (*Configur
 	c.mgr = m
 	go c.run()
 	return c, nil
+}
+
+// Containers retrieves the list of currently registered containers.
+func (c *Configurator) Containers() []*container.Container {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	containers := []*container.Container{}
+	for _, cont := range c.containers {
+		containers = append(containers, cont)
+	}
+	return containers
 }
 
 // Add adds a domain to the configurator.
