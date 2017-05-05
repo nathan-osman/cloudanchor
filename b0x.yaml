@@ -5,4 +5,5 @@ compression:
 custom:
   - files:
     - server/static
-    base: server
+    prefix: static
+    base: server/static

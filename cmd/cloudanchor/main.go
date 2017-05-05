@@ -106,12 +106,18 @@ func main() {
 		defer watcher.Close()
 
 		// Create the server
-		srv, err := server.New(addr, username, password)
-		if err != nil {
-			log.Error(err)
-			return
+		if len(c.String("server-addr")) != 0 {
+			srv, err := server.New(
+				c.String("server-addr"),
+				c.String("server-username"),
+				c.String("server-password"),
+			)
+			if err != nil {
+				log.Error(err)
+				return
+			}
+			defer srv.Close()
 		}
-		defer srv.Close()
 
 		// Wait for a signal before shutting down
 		sigChan := make(chan os.Signal)
