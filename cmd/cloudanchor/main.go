@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/nathan-osman/cloudanchor/configurator"
+	"github.com/nathan-osman/cloudanchor/server"
 	"github.com/nathan-osman/cloudanchor/watcher"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -29,6 +30,22 @@ func main() {
 			EnvVar: "ACME_DIR",
 			Value:  "/etc/cloudanchor",
 		},
+		cli.StringFlag{
+			Name:   "config-type",
+			Usage:  "web server `type` to manage",
+			EnvVar: "CONFIG_TYPE",
+			Value:  configurator.Nginx,
+		},
+		cli.StringFlag{
+			Name:   "config-file",
+			Usage:  "`file` for storing web server configuration",
+			EnvVar: "CONFIG_FILE",
+		},
+		cli.StringFlag{
+			Name:   "config-pidfile",
+			Usage:  "absolute `path` to pidfile for web server",
+			EnvVar: "CONFIG_PIDFILE",
+		},
 		cli.BoolFlag{
 			Name:   "debug",
 			Usage:  "enable debug output",
@@ -41,20 +58,19 @@ func main() {
 			Value:  "unix:///var/run/docker.sock",
 		},
 		cli.StringFlag{
-			Name:   "server-type",
-			Usage:  "web server `type` to manage",
-			EnvVar: "SERVER_TYPE",
-			Value:  configurator.Nginx,
+			Name:   "server-addr",
+			Usage:  "`address` for the admin server",
+			EnvVar: "SERVER_ADDR",
 		},
 		cli.StringFlag{
-			Name:   "server-file",
-			Usage:  "`file` for storing web server configuration",
-			EnvVar: "SERVER_FILE",
+			Name:   "server-username",
+			Usage:  "`username` for HTTP basic auth",
+			EnvVar: "SERVER_USERNAME",
 		},
 		cli.StringFlag{
-			Name:   "server-pidfile",
-			Usage:  "absolute `path` to pidfile for web server",
-			EnvVar: "SERVER_PIDFILE",
+			Name:   "server-password",
+			Usage:  "`password` for HTTP basic auth",
+			EnvVar: "SERVER_PASSWORD",
 		},
 	}
 	app.Action = func(c *cli.Context) {
@@ -67,9 +83,9 @@ func main() {
 		// Create the configurator
 		conf, err := configurator.New(
 			context.TODO(),
-			c.String("server-type"),
-			c.String("server-file"),
-			c.String("server-pidfile"),
+			c.String("config-type"),
+			c.String("config-file"),
+			c.String("config-pidfile"),
 			c.String("acme-addr"),
 			c.String("acme-dir"),
 		)
@@ -88,6 +104,14 @@ func main() {
 			return
 		}
 		defer watcher.Close()
+
+		// Create the server
+		srv, err := server.New(addr, username, password)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		defer srv.Close()
 
 		// Wait for a signal before shutting down
 		sigChan := make(chan os.Signal)
