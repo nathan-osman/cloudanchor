@@ -89,14 +89,7 @@ func (c *Configurator) writeConfig() error {
 }
 
 // callback updates the config file and triggers a server reload.
-func (c *Configurator) callback(domains ...string) error {
-	func() {
-		c.mutex.Lock()
-		defer c.mutex.Unlock()
-		for _, d := range domains {
-			c.tlsDomains[d] = true
-		}
-	}()
+func (c *Configurator) callback() error {
 	return c.writeConfig()
 }
 
@@ -153,7 +146,7 @@ func (c *Configurator) run() {
 			delete(pendingContainers, id)
 			c.removeContainer(id)
 		case <-pendingTrigger:
-			c.log.Debugf("adding %d containers", len(pendingContainers))
+			c.log.Debugf("adding %d container(s)", len(pendingContainers))
 			if err := c.addContainers(ctx, pendingContainers); err != nil {
 				c.log.Error(err)
 				continue

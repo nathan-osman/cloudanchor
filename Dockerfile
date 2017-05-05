@@ -1,6 +1,9 @@
 FROM nginx:latest
 MAINTAINER Nathan Osman <nathan@quickmediasolutions.com>
 
+# Add the root CAs
+ADD https://curl.haxx.se/ca/cacert.pem /etc/ssl/certs/
+
 # Install supervisord
 RUN \
     apt-get update && \
