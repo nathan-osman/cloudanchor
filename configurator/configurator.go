@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/nathan-osman/cloudanchor/container"
 	"github.com/nathan-osman/go-simpleacme/manager"
@@ -89,40 +88,46 @@ func (c *Configurator) writeConfig() error {
 }
 
 // callback updates the config file and triggers a server reload.
-func (c *Configurator) callback() error {
-	return c.writeConfig()
-}
-
-// addContainers adds containers to the configurator.
-func (c *Configurator) addContainers(ctx context.Context, containers map[string]*container.Container) error {
-	domains := []string{}
+func (c *Configurator) callback(domains ...string) {
 	func() {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
-		for _, cont := range containers {
-			domains = append(domains, cont.Domains...)
-			c.containers[cont.ID] = cont
+		for _, d := range domains {
+			c.tlsDomains[d] = true
 		}
+	}()
+	if err := c.writeConfig(); err != nil {
+		c.log.Error(err)
+	}
+}
+
+// addContainer adds a containers to the configurator.
+func (c *Configurator) addContainer(ctx context.Context, cont *container.Container) error {
+	func() {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+		c.containers[cont.ID] = cont
 	}()
 	if err := c.writeConfig(); err != nil {
 		return err
 	}
-	go func() {
-		c.mgr.Add(ctx, domains...)
-	}()
-	return nil
+	return c.mgr.Add(ctx, cont.Domains...)
 }
 
 // removeContainer removes a container from the configurator.
-func (c *Configurator) removeContainer(id string) {
+func (c *Configurator) removeContainer(ctx context.Context, id string) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if cont, ok := c.containers[id]; ok {
+		if err := c.mgr.Remove(ctx, cont.Domains...); err != nil {
+			return err
+		}
 		for _, d := range cont.Domains {
 			delete(c.tlsDomains, d)
 		}
 		delete(c.containers, id)
 	}
+	return nil
 }
 
 // run responds to container changes and restarts the server.
@@ -133,27 +138,17 @@ func (c *Configurator) run() {
 		<-c.stop
 		cancel()
 	}()
-	var (
-		pendingContainers = make(map[string]*container.Container)
-		pendingTrigger    <-chan time.Time
-	)
 	for {
+		var err error
 		select {
 		case cont := <-c.add:
-			pendingContainers[cont.ID] = cont
-			pendingTrigger = time.After(10 * time.Second)
+			err = c.addContainer(ctx, cont)
 		case id := <-c.remove:
-			delete(pendingContainers, id)
-			c.removeContainer(id)
-		case <-pendingTrigger:
-			c.log.Debugf("adding %d container(s)", len(pendingContainers))
-			if err := c.addContainers(ctx, pendingContainers); err != nil {
-				c.log.Error(err)
-				continue
-			}
-			pendingContainers = make(map[string]*container.Container)
-			pendingTrigger = nil
+			err = c.removeContainer(ctx, id)
 		case <-ctx.Done():
+			return
+		}
+		if err == context.Canceled {
 			return
 		}
 	}
