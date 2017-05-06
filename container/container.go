@@ -1,16 +1,14 @@
 package container
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types"
 )
 
 const (
+	labelAddr    = "cloudanchor.addr"
 	labelDomains = "cloudanchor.domains"
-	labelPort    = "cloudanchor.port"
 )
 
 // Container stores the configuration for a container.
@@ -36,15 +34,9 @@ func New(cJSON types.ContainerJSON) *Container {
 		domains = append(domains, strings.TrimSpace(d))
 	}
 
-	// Port is also required; the reverse proxy will use this port for issuing
-	// requests to the backend
-	portStr, ok := cJSON.Config.Labels[labelPort]
+	// Address is required for setting up the reverse proxy
+	addr, ok := cJSON.Config.Labels[labelAddr]
 	if !ok {
-		return nil
-	}
-	port := 0
-	port, _ = strconv.Atoi(portStr)
-	if port == 0 {
 		return nil
 	}
 
@@ -53,6 +45,6 @@ func New(cJSON types.ContainerJSON) *Container {
 		ID:      cJSON.ID,
 		Name:    cJSON.Name,
 		Domains: domains,
-		Addr:    fmt.Sprintf("%s:%d", cJSON.NetworkSettings.IPAddress, port),
+		Addr:    addr,
 	}
 }
