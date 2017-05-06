@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/nathan-osman/cloudanchor/container"
 	"github.com/nathan-osman/go-simpleacme/manager"
@@ -116,7 +117,14 @@ func (c *Configurator) addContainers(ctx context.Context, containers ...*contain
 	if err := c.writeConfig(); err != nil {
 		return err
 	}
-	return c.mgr.Add(ctx, domains...)
+	go func() {
+		select {
+		case <-time.After(2 * time.Second):
+			c.mgr.Add(ctx, domains...)
+		case <-ctx.Done():
+		}
+	}()
+	return nil
 }
 
 // removeContainer removes a container from the configurator.
@@ -213,7 +221,7 @@ func (c *Configurator) Containers() []*container.Container {
 }
 
 // Add adds containers to the configurator.
-func (c *Configurator) Add(ctx context.Context, containers []*container.Container) error {
+func (c *Configurator) Add(ctx context.Context, containers ...*container.Container) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
