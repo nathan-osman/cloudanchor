@@ -155,7 +155,9 @@ func (c *Configurator) run() {
 		if err == context.Canceled {
 			return
 		}
-		c.log.Error(err)
+		if err != nil {
+			c.log.Error(err)
+		}
 	}
 }
 
