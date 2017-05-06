@@ -89,7 +89,7 @@ func (c *Configurator) writeConfig() error {
 
 // callback updates the config file and triggers a server reload.
 func (c *Configurator) callback(domains ...string) {
-	c.log.Debug("certificates loaded for %d domain(s)", len(domains))
+	c.log.Debugf("certificates loaded for %d domain(s)", len(domains))
 	func() {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
