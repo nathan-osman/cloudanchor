@@ -27,7 +27,7 @@ type Configurator struct {
 	mutex      sync.Mutex
 	stop       chan bool
 	stopped    chan bool
-	add        chan *container.Container
+	add        chan []*container.Container
 	remove     chan string
 	type_      string
 	file       string
@@ -102,17 +102,21 @@ func (c *Configurator) callback(domains ...string) {
 	}
 }
 
-// addContainer adds a containers to the configurator.
-func (c *Configurator) addContainer(ctx context.Context, cont *container.Container) error {
+// addContainers adds containers to the configurator.
+func (c *Configurator) addContainers(ctx context.Context, containers ...*container.Container) error {
+	domains := []string{}
 	func() {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
-		c.containers[cont.ID] = cont
+		for _, cont := range containers {
+			c.containers[cont.ID] = cont
+			domains = append(domains, cont.Domains...)
+		}
 	}()
 	if err := c.writeConfig(); err != nil {
 		return err
 	}
-	return c.mgr.Add(ctx, cont.Domains...)
+	return c.mgr.Add(ctx, domains...)
 }
 
 // removeContainer removes a container from the configurator.
@@ -145,8 +149,8 @@ func (c *Configurator) run() {
 	for {
 		var err error
 		select {
-		case cont := <-c.add:
-			err = c.addContainer(ctx, cont)
+		case containers := <-c.add:
+			err = c.addContainers(ctx, containers...)
 		case id := <-c.remove:
 			err = c.removeContainer(ctx, id)
 		case <-ctx.Done():
@@ -177,7 +181,7 @@ func New(ctx context.Context, type_, file, pidfile, addr, dir string) (*Configur
 	c := &Configurator{
 		stop:       make(chan bool),
 		stopped:    make(chan bool),
-		add:        make(chan *container.Container),
+		add:        make(chan []*container.Container),
 		remove:     make(chan string),
 		type_:      type_,
 		file:       file,
@@ -208,17 +212,17 @@ func (c *Configurator) Containers() []*container.Container {
 	return containers
 }
 
-// Add adds a domain to the configurator.
-func (c *Configurator) Add(ctx context.Context, cont *container.Container) error {
+// Add adds containers to the configurator.
+func (c *Configurator) Add(ctx context.Context, containers []*container.Container) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case c.add <- cont:
+	case c.add <- containers:
 		return nil
 	}
 }
 
-// Remove removes a domain from the configurator.
+// Remove removes a container from the configurator.
 func (c *Configurator) Remove(ctx context.Context, id string) error {
 	select {
 	case <-ctx.Done():
