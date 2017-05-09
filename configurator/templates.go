@@ -37,7 +37,7 @@ server {
     server_name {{$d.Name}};
 {{if $d.EnableTLS}}
     location / {
-        return 301 https://{{$d.Name}};
+        return 301 https://{{$d.Name}}$request_uri;
     }
 {{else}}
     location /.well-known/ {
