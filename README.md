@@ -1,3 +1,5 @@
+> **Note:** this project has been deprecated in favor of [caddy-docker](https://github.com/nathan-osman/caddy-docker).
+
 ## cloudanchor
 
 Have a bunch of web applications running in Docker? Tired of continually editing Nginx or Apache configuration files as applications are added and removed? Then cloudanchor is for you.
